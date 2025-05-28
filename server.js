@@ -1,0 +1,77 @@
+const express = require('express');
+const cors = require('cors');
+const mongoose = require('mongoose');
+const passport = require('passport');
+const path = require('path');
+require('dotenv').config();
+
+// Import routes
+const authRoutes = require('./routes/auth');
+const quizRoutes = require('./routes/quizzes');
+const userRoutes = require('./routes/user');
+
+// Initialize app
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+app.use(cors());
+
+// Passport middleware
+app.use(passport.initialize());
+require('./config/passport')(passport);
+
+// Connect to MongoDB
+const connectDB = require('./config/db');
+connectDB();
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/quizzes', quizRoutes);
+app.use('/api/users', userRoutes);
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  const statusCode = err.statusCode || 500;
+  
+  // Log error for debugging
+  console.error('Error:', {
+    timestamp: new Date().toISOString(),
+    method: req.method,
+    path: req.path,
+    status: statusCode,
+    message: err.message,
+    stack: err.stack
+  });
+
+  // Format error response
+  const errorResponse = {
+    success: false,
+    message: process.env.NODE_ENV === 'production' 
+      ? 'An error occurred. Please try again later.' 
+      : err.message,
+    errors: err.details || []
+  };
+
+  if (process.env.NODE_ENV === 'development') {
+    errorResponse.stack = err.stack;
+  }
+
+  res.status(statusCode).json(errorResponse);
+});
+
+// Serve static assets in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../client/build')));
+  
+  app.get('*', (req, res) => {
+    res.sendFile(path.resolve(__dirname, '../client', 'build', 'index.html'));
+  });
+}
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
