@@ -1,65 +1,118 @@
 const User = require('../models/User');
 const crypto = require('crypto');
-const { OAuth2Client } = require('google-auth-library');
 const sendEmail = require('../utils/sendEmail');
-
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const { validationResult } = require('express-validator');
 
 // @desc    Register a user
 // @route   POST /api/auth/signup
 // @access  Public
 exports.signup = async (req, res) => {
   try {
+    console.log('Signup request body:', req.body);
+    
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      console.log('Validation errors:', errors.array());
+      return res.status(400).json({
+        success: false,
+        errors: errors.array()
+      });
+    }
+
     const { name, email, password } = req.body;
 
-    // Validate request body
-    if (!name || !email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide name, email, and password'
-      });
-    }
-
-    // Log the request body for debugging (remove in production)
-    console.log('Signup request:', { name, email });
+    // Log the received password for debugging
+    console.log('Received password in signup:', password);
 
     // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
+    let user = await User.findOne({ email });
+    if (user) {
+      console.log('User already exists with email:', email);
       return res.status(400).json({
         success: false,
-        message: 'Email already registered'
+        message: 'User already exists with this email'
       });
     }
 
-    // Create new user
-    const user = await User.create({
-      name,
-      email,
-      password
+    // Log the password before creating user
+    console.log('Password before creating user:', password);
+    
+    // Create user with explicit fields
+    user = new User({
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      password: password, // Should be saved as plain text
+      role: 'user' // Explicitly set role
+    });
+    
+    // Log the user object right after creation
+    console.log('User object after creation (before save):', {
+      ...user.toObject(),
+      password: user.password // Explicitly log the password
     });
 
-    // Log successful creation
-    console.log('User created successfully:', user._id);
+    console.log('User before save:', {
+      name: user.name,
+      email: user.email,
+      passwordLength: password ? password.length : 0,
+      role: user.role
+    });
     
-    sendTokenResponse(user, 201, res);
-  } catch (error) {
-    // Log detailed error information
-    console.error('Signup error:', error);
-    
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({
+    try {
+      // Log just before saving
+      console.log('Password right before save in controller:', user.password);
+      
+      // Save user to database
+      const savedUser = await user.save();
+      
+      // Log the saved user (password will be hidden due to select:false)
+      console.log('User after save (password hidden by select:false):', {
+        _id: savedUser._id,
+        name: savedUser.name,
+        email: savedUser.email,
+        role: savedUser.role,
+        hasPassword: !!savedUser.password
+      });
+      
+      // Explicitly fetch the user with password to verify
+      const userWithPassword = await User.findById(savedUser._id).select('+password');
+      console.log('User with password from DB:', {
+        _id: userWithPassword._id,
+        password: userWithPassword.password
+      });
+    } catch (saveError) {
+      console.error('Error saving user:', saveError);
+      return res.status(500).json({
         success: false,
-        message: 'Validation error',
-        errors: Object.values(error.errors).map(err => err.message)
+        message: 'Error creating user',
+        error: saveError.message
       });
     }
 
+    // Create token
+    const token = user.getSignedJwtToken();
+    console.log('Generated token for user:', user._id);
+
+    // Return success response with user data (excluding password)
+    const userResponse = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      createdAt: user.createdAt
+    };
+
+    res.status(201).json({
+      success: true,
+      token,
+      user: userResponse
+    });
+  } catch (error) {
+    console.error('Signup error:', error);
     res.status(500).json({
       success: false,
-      message: process.env.NODE_ENV === 'development' 
-        ? error.message 
-        : 'Server error occurred. Please try again later.'
+      message: 'Server error during signup',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -69,15 +122,15 @@ exports.signup = async (req, res) => {
 // @access  Public
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
-
-    // Validate email & password
-    if (!email || !password) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide an email and password'
+        errors: errors.array()
       });
     }
+
+    const { email, password } = req.body;
 
     // Check for user
     const user = await User.findOne({ email }).select('+password');
@@ -97,51 +150,25 @@ exports.login = async (req, res) => {
       });
     }
 
-    sendTokenResponse(user, 200, res);
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
+    // Create token
+    const token = user.getSignedJwtToken();
 
-// @desc    Google OAuth login
-// @route   POST /api/auth/google
-// @access  Public
-exports.googleAuth = async (req, res) => {
-  try {
-    const { idToken } = req.body;
-    
-    // Verify Google token
-    const ticket = await client.verifyIdToken({
-      idToken,
-      audience: process.env.GOOGLE_CLIENT_ID
+    res.status(200).json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
     });
-    
-    const { name, email, sub } = ticket.getPayload();
-    
-    // Check if user exists
-    let user = await User.findOne({ email });
-    
-    if (!user) {
-      // Create new user
-      user = await User.create({
-        name,
-        email,
-        googleId: sub
-      });
-    } else if (!user.googleId) {
-      // If user exists but doesn't have googleId
-      user.googleId = sub;
-      await user.save();
-    }
-    
-    sendTokenResponse(user, 200, res);
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: 'Server error during login',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

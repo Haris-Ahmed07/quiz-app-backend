@@ -267,12 +267,41 @@ exports.deleteQuiz = async (req, res) => {
 // @route   POST /api/quizzes/:id/attempt
 // @access  Public
 exports.submitQuizAttempt = async (req, res) => {
+  console.log('\n===== QUIZ ATTEMPT SUBMISSION STARTED =====');
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Request URL:', req.originalUrl);
+  console.log('Request Method:', req.method);
+  console.log('Request Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('Request Body:', JSON.stringify(req.body, null, 2));
+  console.log('Request Params:', JSON.stringify(req.params, null, 2));
+  console.log('User:', req.user || 'No user authenticated');
+  console.log('=========================================\n');
+
+
   try {
-    const { id: quizId } = req.params;  // Changed to extract 'id' from params and alias it as quizId
+    const { id: quizId } = req.params;
     const { responses, timeTaken } = req.body;
 
-    // Validate required fields
+     // Add more detailed logging for the incoming data
+     console.log('\n===== PROCESSING QUIZ ATTEMPT =====');
+     console.log(`Quiz ID: ${quizId}`);
+     console.log(`Time Taken: ${timeTaken} seconds`);
+     console.log(`Number of responses: ${responses ? responses.length : 0}`);
+      
+     if (responses && Array.isArray(responses)) {
+      console.log('\n===== RESPONSES RECEIVED =====');
+      responses.forEach((response, index) => {
+        console.log(`\nResponse ${index + 1}:`);
+        console.log(`- Question ID: ${response.questionId}`);
+        console.log(`- Selected Answer:`, response.selectedAnswer);
+        console.log(`- Type of selectedAnswer:`, typeof response.selectedAnswer);
+      });
+      console.log('==============================\n');
+    }
+
+    // Basic validation
     if (!quizId) {
+      console.log('Error: No quiz ID provided');
       return res.status(400).json({
         success: false,
         message: 'Quiz ID is required'
@@ -280,57 +309,137 @@ exports.submitQuizAttempt = async (req, res) => {
     }
 
     if (!responses || !Array.isArray(responses)) {
+      console.log('Error: Invalid or missing responses array');
       return res.status(400).json({
         success: false,
-        message: 'Responses array is required'
+        message: 'Valid responses array is required'
       });
     }
 
+    console.log(`Processing quiz ${quizId} with ${responses.length} responses`);
+
     // Get the quiz
-    const quiz = await Quiz.findById(quizId);
+    const quiz = await Quiz.findById(quizId).lean();
     if (!quiz) {
+      console.log(`Error: Quiz ${quizId} not found`);
       return res.status(404).json({
         success: false,
         message: 'Quiz not found'
       });
     }
 
-    // Calculate score
-    let score = 0;
-    const processedResponses = responses.map(response => {
-      const question = quiz.questions.id(response.questionId);
-      const isCorrect = question.correctAnswer == response.selectedAnswer;
-      
-      if (isCorrect) {
-        score += question.marks;
-      }
-      
-      return {
-        questionId: response.questionId,
-        selectedAnswer: response.selectedAnswer,
-        isCorrect
-      };
-    });
+    console.log(`Found quiz: ${quiz.title} with ${quiz.questions.length} questions`);
 
-    // Create quiz attempt with user ID
-    const quizAttempt = await QuizAttempt.create({
-      userId: req.user.id,  // Add user ID from authenticated request
+    // Process responses
+    let score = 0;
+    // Fixed answer checking logic for your current data format
+    // Fixed answer checking logic for your current data format
+const processedResponses = responses.map((response, index) => {
+  console.log(`Processing response ${index + 1}/${responses.length}`, response);
+  
+  const question = quiz.questions.find(q => q._id.toString() === response.questionId);
+  if (!question) {
+    console.log(`Question ${response.questionId} not found in quiz`);
+    return null;
+  }
+
+  const userAnswer = response.selectedAnswer;
+  let isCorrect = false;
+
+  console.log(`Question type: ${question.type}`);
+  console.log(`Correct answer: ${question.correctAnswer} (type: ${typeof question.correctAnswer})`);
+  console.log(`User answer: ${userAnswer} (type: ${typeof userAnswer})`);
+
+  // Handle different question types
+  switch (question.type) {
+    case 'MCQ':
+      // For MCQ, compare the selected index directly
+      isCorrect = parseInt(question.correctAnswer) === parseInt(userAnswer);
+      console.log(`MCQ comparison: ${question.correctAnswer} === ${userAnswer} = ${isCorrect}`);
+      break;
+      
+    case 'Fill':
+      // For fill-in-the-blank, do case-insensitive comparison
+      if (!question.correctAnswer || userAnswer === null || userAnswer === undefined) {
+        isCorrect = false;
+      } else {
+        const correctStr = question.correctAnswer.toString().toLowerCase().trim();
+        const userStr = userAnswer.toString().toLowerCase().trim();
+        isCorrect = correctStr === userStr;
+        console.log(`Fill comparison: "${correctStr}" === "${userStr}" = ${isCorrect}`);
+      }
+      break;
+      
+    default:
+      console.log('Unknown question type:', question.type);
+      isCorrect = false;
+  }
+
+  if (isCorrect) {
+    score += question.marks || 1;
+    console.log(`✓ Correct! Added ${question.marks || 1} marks. Total score: ${score}`);
+  } else {
+    console.log(`✗ Incorrect. Score remains: ${score}`);
+  }
+
+  return {
+    questionId: response.questionId,
+    selectedAnswer: userAnswer,
+    isCorrect,
+    questionType: question.type,
+    correctAnswer: question.correctAnswer
+  };
+}).filter(Boolean);
+
+    console.log(`Quiz processed. Score: ${score}/${quiz.questions.length}`);
+
+    // Create attempt data
+    const attemptData = {
       quizId,
+      userId: req.user?.id || new mongoose.Types.ObjectId(), // Use a temporary ID if not logged in
       score,
-      totalMarks: quiz.totalMarks,
+      totalMarks: quiz.questions.reduce((sum, q) => sum + (q.marks || 1), 0),
       responses: processedResponses,
-      timeTaken
-    });
+      timeTaken: timeTaken || 0,
+      completedAt: new Date()
+    };
+
+    console.log('Attempt data prepared:', JSON.stringify(attemptData, null, 2));
+
+    // Save the attempt
+    const quizAttempt = await QuizAttempt.create(attemptData);
+    console.log('Quiz attempt saved successfully:', quizAttempt._id);
 
     res.status(201).json({
       success: true,
-      data: quizAttempt
+      data: {
+        ...quizAttempt.toObject(),
+        percentage: Math.round((score / attemptData.totalMarks) * 100)
+      }
     });
+
   } catch (error) {
+    console.error('!!! CRITICAL ERROR in submitQuizAttempt !!!');
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    console.error('Request details:', {
+      method: req.method,
+      url: req.originalUrl,
+      params: req.params,
+      body: req.body,
+      user: req.user || 'No user'
+    });
+
     res.status(500).json({
       success: false,
-      message: error.message
+      message: 'Failed to submit quiz attempt',
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack
+      } : undefined
     });
+  } finally {
+    console.log('=== End of quiz submission ===');
   }
 };
 

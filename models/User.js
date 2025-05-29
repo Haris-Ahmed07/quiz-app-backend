@@ -1,79 +1,111 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-const UserSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: [true, 'Please provide a name'],
-    trim: true
-  },
-  email: {
-    type: String,
-    required: [true, 'Please provide an email'],
-    unique: true,
-    match: [
-      /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
-      'Please provide a valid email'
-    ]
-  },
-  password: {
-    type: String,
-    required: [function() {
-      return !this.googleId; // Password is required only if googleId is not present
-    }, 'Please provide a password'],
-    minlength: [6, 'Password must be at least 6 characters'],
-    select: false
-  },
-  googleId: {
-    type: String
-  },
-  role: {
-    type: String,
-    enum: ['user', 'admin'],
-    default: 'user'
-  },
-  quizHistory: [{
-    quizId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Quiz'
+// Define User Schema
+const UserSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: [true, 'Please provide a name'],
+      trim: true,
+      maxlength: [50, 'Name cannot be more than 50 characters']
     },
-    score: Number,
-    date: {
-      type: Date,
-      default: Date.now
-    }
-  }],
-  createdAt: {
-    type: Date,
-    default: Date.now
+    email: {
+      type: String,
+      required: [true, 'Please provide an email'],
+      unique: true,
+      lowercase: true,
+      trim: true,
+      match: [
+        /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$/,
+        'Please provide a valid email address'
+      ]
+    },
+    password: {
+      type: String,
+      required: [true, 'Please provide a password'],
+      minlength: [6, 'Password must be at least 6 characters long'],
+      select: false // Don't return password by default
+    },
+    role: {
+      type: String,
+      enum: ['user', 'admin'],
+      default: 'user'
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    },
+    lastLogin: {
+      type: Date
+    },
+    passwordChangedAt: Date
+  },
+  {
+    timestamps: true, // Adds createdAt and updatedAt timestamps
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
   }
-});
+);
 
-// Encrypt password using bcrypt
-UserSchema.pre('save', async function(next) {
-  if (!this.isModified('password') || !this.password) {
-    next();
+// Ensure password is saved as plain text
+UserSchema.pre('save', function(next) {
+  // Only run this if password was modified
+  if (this.isModified('password')) {
+    console.log('Password before save (in pre-save hook):', this.password);
+    // Force plain text password by bypassing any potential hashing
+    this._plainPassword = this.password;
+    this.password = this._plainPassword;
   }
-
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
   next();
 });
+
+// Add post-save hook to clean up
+UserSchema.post('save', function(doc) {
+  console.log('Password after save (in post-save hook):', doc.password);
+  if (this._plainPassword) {
+    this.password = this._plainPassword;
+    delete this._plainPassword;
+  }
+});
+
+
+// Instance method to check if password is correct
+UserSchema.methods.correctPassword = function(candidatePassword, userPassword) {
+  // Direct string comparison since passwords are stored in plain text
+  return candidatePassword === userPassword;
+};
+
+// Instance method to check if password was changed after token was issued
+UserSchema.methods.changedPasswordAfter = function(JWTTimestamp) {
+  if (this.passwordChangedAt) {
+    const changedTimestamp = parseInt(this.passwordChangedAt.getTime() / 1000, 10);
+    return JWTTimestamp < changedTimestamp;
+  }
+  // False means NOT changed
+  return false;
+};
 
 // Sign JWT and return
 UserSchema.methods.getSignedJwtToken = function() {
   return jwt.sign(
-    { id: this._id, role: this.role },
+    { 
+      id: this._id, 
+      role: this.role 
+    },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRE }
+    { 
+      expiresIn: process.env.JWT_EXPIRE || '30d' 
+    }
   );
 };
 
-// Match user entered password to hashed password in database
-UserSchema.methods.matchPassword = async function(enteredPassword) {
-  if (!this.password) return false;
-  return await bcrypt.compare(enteredPassword, this.password);
+// Match user entered password to plain text password in database
+UserSchema.methods.matchPassword = function(enteredPassword) {
+  return enteredPassword === this.password;
 };
 
-module.exports = mongoose.model('User', UserSchema);
+// Create and export the User model
+const User = mongoose.model('User', UserSchema);
+
+module.exports = User;
