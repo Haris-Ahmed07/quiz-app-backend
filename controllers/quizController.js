@@ -1,6 +1,7 @@
 const Quiz = require('../models/Quiz');
 const QuizAttempt = require('../models/QuizAttempt');
 const User = require('../models/User');
+const mongoose = require('mongoose');
 
 // @desc    Get all quizzes
 // @route   GET /api/quizzes
@@ -458,6 +459,92 @@ exports.getSubjects = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message
+    });
+  }
+};
+
+// @desc    Get quiz attempt by ID
+// @route   GET /api/quizzes/attempt/:attemptId/results
+// @access  Public
+exports.getQuizAttemptById = async (req, res) => {
+  console.log('getQuizAttemptById called with params:', req.params);
+  console.log('Full URL:', req.originalUrl);
+  try {
+    const { attemptId } = req.params;
+
+    // Validate if the ID is a valid MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(attemptId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid attempt ID format'
+      });
+    }
+
+    // Find the attempt and populate the quiz details
+    const attempt = await QuizAttempt.findById(attemptId)
+      .populate({
+        path: 'quizId',
+        select: 'title subject description questions',
+        populate: {
+          path: 'questions',
+          select: 'questionText options type marks correctAnswer'
+        }
+      })
+      .lean();
+
+    if (!attempt) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quiz attempt not found'
+      });
+    }
+
+    // Calculate percentage if not already calculated
+    if (!attempt.percentage) {
+      attempt.percentage = Math.round((attempt.score / attempt.totalMarks) * 100);
+    }
+
+    // Map through responses and add question details
+    const enhancedResponses = attempt.responses.map(response => {
+      const question = attempt.quizId.questions.find(
+        q => q._id.toString() === response.questionId.toString()
+      );
+      
+      return {
+        ...response,
+        questionText: question?.questionText || 'Question not found',
+        questionType: question?.type,
+        options: question?.options || [],
+        correctAnswer: question?.correctAnswer,
+        marks: question?.marks || 1
+      };
+    });
+
+    // Prepare the response data
+    const responseData = {
+      _id: attempt._id,
+      quizId: attempt.quizId._id,
+      quizTitle: attempt.quizId.title,
+      subject: attempt.quizId.subject,
+      score: attempt.score,
+      totalMarks: attempt.totalMarks,
+      percentage: attempt.percentage,
+      timeTaken: attempt.timeTaken,
+      completedAt: attempt.completedAt,
+      responses: enhancedResponses
+    };
+
+    res.status(200).json({
+      success: true,
+      data: responseData
+    });
+
+  } catch (error) {
+    console.error('Error fetching quiz attempt:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch quiz attempt',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

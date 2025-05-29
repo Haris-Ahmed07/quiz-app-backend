@@ -22,10 +22,21 @@ app.use(cors());
 const connectDB = require('./config/db');
 connectDB();
 
+// Debug middleware for all routes
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] Incoming request: ${req.method} ${req.originalUrl}`);
+  next();
+});
+
 // Routes
+console.log('Mounting routes...');
 app.use('/api/auth', authRoutes);
 app.use('/api/quizzes', quizRoutes);
 app.use('/api/users', userRoutes);
+
+// Debug route to list all routes
+console.log('Available routes:');
+console.log('GET /api/quizzes/attempt/:attemptId/results - Get quiz attempt by ID');
 
 // Error handling middleware
 app.use((err, req, res, next) => {
