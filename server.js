@@ -8,6 +8,7 @@ require('dotenv').config();
 const authRoutes = require('./routes/auth');
 const quizRoutes = require('./routes/quizzes');
 const userRoutes = require('./routes/user');
+const adminRoutes = require('./routes/admin');
 
 // Initialize app
 const app = express();
@@ -33,10 +34,16 @@ console.log('Mounting routes...');
 app.use('/api/auth', authRoutes);
 app.use('/api/quizzes', quizRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Debug route to list all routes
 console.log('Available routes:');
 console.log('GET /api/quizzes/attempt/:attemptId/results - Get quiz attempt by ID');
+console.log('ADMIN ROUTES:');
+console.log('GET    /api/admin/stats - Get admin dashboard statistics');
+console.log('GET    /api/admin/users - Get all users with their quizzes and attempts');
+console.log('DELETE /api/admin/users/:id - Delete a user and all their data');
+console.log('DELETE /api/admin/quizzes/:id - Delete a quiz and all its attempts');
 
 // Error handling middleware
 app.use((err, req, res, next) => {

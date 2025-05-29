@@ -1,35 +1,42 @@
 const mongoose = require('mongoose');
 
 const QuizAttemptSchema = new mongoose.Schema({
-  userId: {
+  user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   },
-  quizId: {
+  quiz: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Quiz',
     required: true
   },
   score: {
     type: Number,
-    required: true
+    required: true,
+    default: 0
   },
-  totalMarks: {
+  totalQuestions: {
     type: Number,
     required: true
+  },
+  percentage: {
+    type: Number,
+    default: 0
   },
   responses: [{
     questionId: {
       type: mongoose.Schema.Types.ObjectId,
+      ref: 'Question',
       required: true
     },
     selectedAnswer: {
-      type: mongoose.Schema.Types.Mixed // String, Number, or Boolean
+      type: mongoose.Schema.Types.Mixed
     },
     isCorrect: {
       type: Boolean,
-      required: true
+      required: true,
+      default: false
     }
   }],
   completedAt: {
@@ -38,16 +45,46 @@ const QuizAttemptSchema = new mongoose.Schema({
   },
   timeTaken: {
     type: Number, // in seconds
-    required: true
-  }
+    default: 0
+  },
+  // Adding these fields for better querying in admin panel
+  username: String,
+  quizTitle: String
 }, {
+  timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
 
-// Virtual field for percentage score
-QuizAttemptSchema.virtual('percentage').get(function() {
-  return Math.round((this.score / this.totalMarks) * 100);
+// Pre-save hook to calculate percentage and set additional fields
+QuizAttemptSchema.pre('save', async function(next) {
+  try {
+    // Calculate percentage
+    if (this.totalQuestions > 0) {
+      this.percentage = Math.round((this.score / this.totalQuestions) * 100);
+    }
+    
+    // Populate username and quizTitle if not set
+    if (!this.username || !this.quizTitle) {
+      const [user, quiz] = await Promise.all([
+        this.populate('user', 'name email'),
+        this.populate('quiz', 'title')
+      ]);
+      
+      if (user && user.user) {
+        this.username = user.user.name || user.user.email;
+      }
+      
+      if (quiz && quiz.quiz) {
+        this.quizTitle = quiz.quiz.title;
+      }
+    }
+    
+    next();
+  } catch (error) {
+    console.error('Error in QuizAttempt pre-save hook:', error);
+    next(error);
+  }
 });
 
 module.exports = mongoose.model('QuizAttempt', QuizAttemptSchema);
